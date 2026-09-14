@@ -1,0 +1,16 @@
+# The separator itself, for the plugin's own virtualenv. The MCP server does not need any of this;
+# it only shells out to it. Versions are pinned to what was measured on macOS arm64 / Python 3.9:
+#
+#   python3 -m venv ~/Documents/ShadowRoom/_venvs/stem-splitter
+#   ~/Documents/ShadowRoom/_venvs/stem-splitter/bin/pip install -r requirements-local.txt
+#
+# numpy must stay below 2.0: torch 2.2.2 was built against numpy 1.x, and `import torch` fails with
+# "Failed to initialize NumPy: _ARRAY_API not found" when pip resolves numpy 2 on its own (measured).
+torch==2.2.2
+torchaudio==2.2.2
+numpy<2
+demucs==4.0.1
+# Without a decoder backend torchaudio cannot open even a plain WAV: `demucs` then fails with
+# "FFmpeg is not installed / Couldn't find appropriate backend" (measured). soundfile is the
+# lightest way to give it one.
+soundfile>=0.12

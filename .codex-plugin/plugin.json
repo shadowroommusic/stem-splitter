@@ -1,0 +1,39 @@
+{
+  "name": "stem-splitter",
+  "version": "0.1.0+codex.20260915011000",
+  "description": "人声 / 鼓 / 贝斯 / 其它分轨（ShadowRoom Music）",
+  "author": {
+    "name": "ShadowRoom Music",
+    "email": "support@shadowroom.cn",
+    "url": "https://shadowroom.cn"
+  },
+  "homepage": "https://shadowroom.cn",
+  "repository": "https://github.com/shadowroommusic/stem-splitter",
+  "license": "AGPL-3.0",
+  "keywords": [
+    "stems",
+    "source-separation",
+    "demucs",
+    "vocals",
+    "dj",
+    "mcp",
+    "shadowroom"
+  ],
+  "interface": {
+    "displayName": "Stem Splitter",
+    "shortDescription": "把一首成品歌拆成人声、鼓、贝斯和其它四条分轨。",
+    "longDescription": "对任意音频文件跑源分离（本地 Demucs，或 STEM_SPLIT_COMMAND 指向的远端/GPU），产出 vocals / drums / bass / other 四条 16-bit PCM WAV。作业异步执行：启动后立刻返回 job id，用 stem_job_status 轮询，stem_job_cancel 可以中止并清理半成品。",
+    "developerName": "ShadowRoom Music",
+    "category": "Music",
+    "capabilities": [
+      "stem-separation",
+      "source-separation",
+      "sampling"
+    ],
+    "websiteURL": "https://shadowroom.cn/tools",
+    "logo": "./assets/icon.png",
+    "brandColor": "#0B0B0F",
+    "defaultPrompt": "把这首歌拆成人声、鼓、贝斯和其它。"
+  },
+  "mcpServers": "./.mcp.json"
+}

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.shadow-jobs/
+stem-splitter-jobs/
+stems/

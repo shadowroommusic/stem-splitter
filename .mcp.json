@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "stem-splitter": {
+      "command": "python3",
+      "args": [
+        "mcp_server.py"
+      ],
+      "cwd": "."
+    }
+  }
+}
