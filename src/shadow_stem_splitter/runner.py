@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+
+import numpy as np
 import sys
 import tempfile
 import time
@@ -31,7 +33,9 @@ def _save(store: JobStore, job_id: str, record: dict) -> dict:
 
 def _demucs_command(python: str, model: str, quality: str, work: Path, source: Path) -> "list[str]":
     chosen = "htdemucs_ft" if quality == "best" and model == "htdemucs" else model
-    command = [python, "-m", "demucs", "--name", chosen, "--out", str(work), "--filename", "{stem}.{ext}"]
+    # --float32 + 前置衰减的输入（见 run_job 的 PRE_GAIN）让 rescale 永不触发；CLI 的
+    # --clip-mode 只有 rescale|clamp 且都是逐条独立（separate.py:104,185-215），所以不用它。
+    command = [python, "-m", "demucs", "--name", chosen, "--float32", "--out", str(work), "--filename", "{stem}.{ext}"]
     if quality == "best":
         # the fine-tuned bag is four models: shifts buy accuracy with time
         command += ["--shifts", "2"]
@@ -50,14 +54,24 @@ def _decode_stem(path: Path) -> "tuple":
         return read_wav(decoded)
 
 
-def _collect(work: Path, out_dir: Path) -> dict:
-    """Find the four stems the backend wrote, and rewrite them as plain PCM WAVs.
+#: 前置衰减（−12 dB）：让 Demucs 的逐条 rescale 永远不触发（ADR-025 v2）。
+PRE_GAIN = 0.25
+#: 组峰值上限：超过就整组共用一个线性增益缩到它（一个标量管四条）。
+GROUP_PEAK = 0.99
+#: Demucs rescale 的特征峰值：`wav / max(1.01 * |wav|.max(), 1)` ⇒ 恰好 1/1.01。
+RESCALE_SIGNATURE = 1.0 / 1.01
 
-    Both backends may write wherever they like inside the work directory (demucs nests them under
-    `<model>/<track>/`), so the stems are found by name rather than by guessing a layout.
+
+def _collect(work: Path, out_dir: Path, pre_gain: float = PRE_GAIN) -> dict:
+    """读回四条 stem，整体还原前置衰减，按**组峰值**缩一次，写 16-bit。
+
+    Demucs 用整条混音的 ref 归一（separate.py:171-177，所有 source 乘回同一个
+    ref.std()），输入整体 ×k ⇒ 四路整体 ×k——乘回 1/pre_gain 精确还原电平；组峰值
+    超 GROUP_PEAK 就整组共用一个增益，四条的相对电平从头到尾只被一个标量动过。
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     found: "dict[str, str]" = {}
+    loaded: "dict[str, tuple]" = {}
     for stem in STEMS:
         candidates = sorted(
             (path for path in work.rglob("*") if path.is_file() and path.stem.lower() == stem),
@@ -67,7 +81,21 @@ def _collect(work: Path, out_dir: Path) -> dict:
             continue
         source = candidates[0]
         samples, rate = read_wav(source) if source.suffix.lower() in (".wav", ".wave") else _decode_stem(source)
-        found[stem] = str(write_wav(out_dir / f"{stem}.wav", samples, rate))
+        restored = samples * (1.0 / pre_gain)
+        peak = float(np.max(np.abs(restored))) if restored.size else 0.0
+        # 安全带：峰值恰好落在 1/1.01（±3e-4）说明 Demucs 还在逐条 rescale——相对电平已破。
+        # 窗口比 ADR 原文的 1e-4 略宽：16-bit 往返在 ×0.25 衰减下的量化误差经 ×4 还原会放大
+        # 到 ~1.1e-4（实测），自然峰值落进 3e-4 窗口的概率仍然可忽略。
+        if abs(peak - RESCALE_SIGNATURE) < 3e-4:
+            raise ValueError(
+                f"stem {stem} 峰值 {peak:.6f} 落在 Demucs rescale 特征区（1/1.01±1e-4）——"
+                "它仍在逐条缩放，相对电平已破；请降低前置衰减重跑，绝不静默交付。"
+            )
+        loaded[stem] = (restored, rate)
+    group_peak = max((float(np.max(np.abs(samples))) for samples, _ in loaded.values() if samples.size), default=0.0)
+    group_gain = min(1.0, GROUP_PEAK / group_peak) if group_peak > 0 else 1.0
+    for stem, (samples, rate) in loaded.items():
+        found[stem] = str(write_wav(out_dir / f"{stem}.wav", samples * group_gain, rate))
     return found
 
 
@@ -92,12 +120,17 @@ def run_job(job_path: "str | Path") -> dict:
             python, reason = find_demucs()
             if python is None:
                 raise ValueError(reason)
+            # ADR-025 v2：先整体 ×PRE_GAIN 写临时文件再交给 Demucs——rescale 只在峰值越
+            # ~0.99 时触发，前置衰减让任何 stem 都远低于阈值；ref 归一对所有 source 用同一
+            # 个标量，输出整体 ×k 精确可逆；--float32 保证它不在 16-bit 量化后再缩。
+            quiet = work / "quiet-input.wav"
+            write_wav(quiet, samples * PRE_GAIN, rate)
             command = _demucs_command(
                 python,
                 str(record.get("model") or "htdemucs"),
                 str(record.get("quality") or "fast"),
                 work,
-                staged,
+                quiet,
             )
         else:
             remote = work / "remote"
