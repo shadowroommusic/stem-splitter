@@ -6,6 +6,8 @@ Demucs, or through a command you point at a GPU box — for any MCP-compatible a
 把一首成品歌拆成人声、鼓、贝斯和其它四条分轨的 MCP 服务：本地跑 Demucs，或用一条命令指向你的 GPU
 机器；任何支持 MCP 的 agent 都能调用。
 
+> **Platform support:** macOS — supported (developed & verified on this machine) · Windows — unverified (paths are cross-platform in the codebase, but no real-machine testing yet).
+
 [中文说明](README.zh-CN.md) · License: [AGPL-3.0](LICENSE)
 
 ## Why it is shaped like this
