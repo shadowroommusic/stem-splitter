@@ -1,7 +1,8 @@
 # Stem Splitter
 
-An MCP server that separates a finished song into **vocals, drums, bass and other** — locally with
-Demucs, or through a command you point at a GPU box — for any MCP-compatible agent.
+An MCP server that separates a finished song into **vocals, drums, bass and other** — or, with the
+six-source model, **guitar and piano on top of those** — locally with Demucs, or through a command
+you point at a GPU box, for any MCP-compatible agent.
 
 把一首成品歌拆成人声、鼓、贝斯和其它四条分轨的 MCP 服务：本地跑 Demucs，或用一条命令指向你的 GPU
 机器；任何支持 MCP 的 agent 都能调用。
@@ -25,6 +26,12 @@ through whichever interpreter has it (by default a virtualenv at
 ## Features
 
 - **Four stems**, the split DJs and producers actually ask for: `vocals`, `drums`, `bass`, `other`.
+- **Six stems when you ask for them.** `model: "htdemucs_6s"` adds `guitar` and `piano`. It is not
+  the default, and that is deliberate: Demucs's own README says its piano source is not working
+  well, and the six sources sum back to the mix more loosely than the four-stem model does —
+  measured on this machine, correlation **0.963–0.997** against the mix (it varies with the
+  material), where four stems hold **0.999**. Use it to pull a guitar or a piano out; use the
+  four-stem model when the sum has to be the song.
 - **Two backends.** Local Demucs (`htdemucs`, or `htdemucs_ft` for the slow fine-tuned bag), or a
   command template (`STEM_SPLIT_COMMAND`) for a remote GPU box, a container, or a wrapper script.
 - **Any input.** WAV is read directly; mp3 / m4a / flac / aiff / ogg go through ffmpeg, or through
@@ -88,7 +95,7 @@ The versions matter: torch 2.2.2 was built against numpy 1.x, so `numpy<2` is pi
 
 | Tool | What it does |
 | --- | --- |
-| `separate_stems` | Start a separation (`path`, `out_dir?`, `model?`, `quality?`, `backend?`) → `{job_id, status, out_dir}` |
+| `separate_stems` | Start a separation (`path`, `out_dir?`, `model?`, `quality?`, `backend?`) → `{job_id, status, out_dir}`. `model` is one of `htdemucs` (default), `htdemucs_ft`, `mdx_extra`, `htdemucs_6s` |
 | `stem_job_status` | One job's status, stage, stems and errors (or the recent jobs) |
 | `stem_job_cancel` | Stop a job and delete its half-written stems |
 | `stem_backends` | Which backends this machine has, and how to enable the missing one |
@@ -103,8 +110,10 @@ shadow-stem-splitter status 20260915-011407-song-20s
 shadow-stem-splitter cancel 20260915-011407-song-20s
 ```
 
-The stages a job moves through are `decode` → `separate` → `collect`; `collect` is where the four
-files are rewritten as plain WAVs and named `vocals.wav`, `drums.wav`, `bass.wav`, `other.wav`.
+The stages a job moves through are `decode` → `separate` → `collect`; `collect` is where the stems
+are rewritten as plain WAVs and named after the model's stem set — `vocals.wav`, `drums.wav`,
+`bass.wav`, `other.wav` for the four-stem models, plus `guitar.wav` and `piano.wav` for
+`htdemucs_6s`. `stem_backends` reports both sets as `stems_by_model`.
 
 ## Safety
 

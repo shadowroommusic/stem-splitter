@@ -37,3 +37,21 @@ per argument. A configured command wins over demucs, because the person who set 
 - Stem sum vs the mix: correlation **0.999**, residual RMS 0.0103 against a 0.19 original (−25 dB).
 - Stems are decorrelated from each other (|r| < 0.3), and an instrumental source yields a silent
   `vocals.wav` — which is the correct answer, not a failure.
+
+## Six stems: a sanity band, not the 0.999 line
+
+`htdemucs_6s` adds `guitar` and `piano` to the four sources (`STEMS_6S` in `backends.py`;
+`stems_for(model)` is the single place that answers "which stems does this model write", and
+`describe()` exposes both sets as `stems_by_model`). It is an explicit option, never the default.
+
+The four-stem acceptance test is a hard line: four stems summed must correlate **≥ 0.999** with the
+mix. That line exists to catch *our own* gain-path bugs — a wrong pre-attenuation, a per-stem rescale
+that fired when it should not have. Six stems fail it for a reason that has nothing to do with our
+code: same song, same gain path, four stems measured 0.9992 while six measured 0.9630 (0.9968 in an
+earlier run — the number moves with the material), because guitar and piano carve energy out of the
+other four and Demucs's own README says the piano source is not working well.
+
+So six stems are accepted on a **sanity band** instead: correlation ≥ 0.95, RMS difference ≤ 3 dB,
+every stem present and not silent. Anything tighter would have to be met by padding the guitar and
+piano energy back into the four main stems — writing a post-processor to make a metric pass rather
+than to make the audio better. We don't do that.

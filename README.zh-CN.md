@@ -1,7 +1,7 @@
 # Stem Splitter
 
-把一首成品歌拆成人声、鼓、贝斯和其它四条分轨的 MCP 服务：本地跑 Demucs，或用一条命令指向你的 GPU
-机器；任何支持 MCP 的 agent 都能调用。
+把一首成品歌拆成人声、鼓、贝斯和其它四条分轨的 MCP 服务（用六源模型时再多出吉他与钢琴）：本地跑
+Demucs，或用一条命令指向你的 GPU 机器；任何支持 MCP 的 agent 都能调用。
 
 An MCP server that separates a finished song into **vocals, drums, bass and other** — locally with
 Demucs, or through a command you point at a GPU box.
@@ -21,6 +21,10 @@ Demucs, or through a command you point at a GPU box.
 ## 功能
 
 - **四条分轨**：`vocals` / `drums` / `bass` / `other`，就是制作人和 DJ 真正会要的那四份。
+- **要吉他/钢琴就上六条**：`model: "htdemucs_6s"` 多出 `guitar` 与 `piano`。它**不是默认**，这是
+  有意的：Demucs 官方 README 自己说 piano 这条源做得不好，而且六条相加回原曲的还原度就是比四轨松——
+  本机实测相关系数 **0.963–0.997**（随素材波动），四轨路径是 **0.999**。要单独拎出吉他或钢琴时用它；
+  要求六条加起来就是原曲时，用四轨模型。
 - **两种后端**：本地 Demucs（`htdemucs`，或慢得多的 `htdemucs_ft` 精调版），或 `STEM_SPLIT_COMMAND`
   指向远端 GPU / 容器 / 包装脚本。
 - **什么格式都能进**：WAV 直接读；mp3 / m4a / flac / aiff / ogg 走 ffmpeg，没有 ffmpeg 时用 macOS
@@ -78,7 +82,7 @@ python3 -m venv ~/Documents/ShadowRoom/_venvs/stem-splitter
 
 | 工具 | 作用 |
 | --- | --- |
-| `separate_stems` | 启动分离（`path`、`out_dir?`、`model?`、`quality?`、`backend?`）→ `{job_id, status, out_dir}` |
+| `separate_stems` | 启动分离（`path`、`out_dir?`、`model?`、`quality?`、`backend?`）→ `{job_id, status, out_dir}`。`model` 取 `htdemucs`（默认）/ `htdemucs_ft` / `mdx_extra` / `htdemucs_6s` |
 | `stem_job_status` | 某个作业的状态、阶段、分轨与错误（不给 id 就列最近的） |
 | `stem_job_cancel` | 中止作业并删掉半成品分轨 |
 | `stem_backends` | 这台机器有哪些后端，缺的那个怎么开 |
