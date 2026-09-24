@@ -44,7 +44,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 class JobStore:
-    """Reads and writes the job files, and starts the detached runner."""
+    """Reads and writes the job files; execution is owned by the resident queue thread."""
 
     def __init__(self, directory: "str | Path | None" = None) -> None:
         self.directory = Path(directory).expanduser() if directory else default_job_dir()
@@ -66,6 +66,7 @@ class JobStore:
         model: str = "htdemucs",
         quality: str = "fast",
         backend: str = "auto",
+        run: bool = False,
     ) -> dict:
         target = Path(source).expanduser()
         if not target.is_file():
@@ -93,16 +94,15 @@ class JobStore:
             "error": None,
         }
         self.path(job_id).write_text(json.dumps(record, ensure_ascii=False, indent=2))
-        runner = [sys.executable, "-m", "shadow_stem_splitter.runner", str(self.path(job_id))]
-        environment = {**os.environ, "PYTHONPATH": self._source_root(), "STEM_SPLIT_JOB": job_id}
-        child = subprocess.Popen(
-            runner,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,  # survives the MCP server: a job is not a request
-            env=environment,
-        )
-        self.update(job_id, pid=child.pid)
+        # 不再起 detached runner（每 job 一进程 → pool 单例跨 job 失效 → 模型每 job 重载，
+        # 实测 3 job = 3 次 model loaded 只省 5.4%）。默认 job 就地留在 queued，由插件进程
+        # 里的常驻队列线程（queue_runner.py）串行取走——worker 与模型只加载一次。
+        # run=True 是同步调试/测试路径：当场在调用进程里执行完（同样复用 pool 单例）。
+        self.update(job_id, pid=os.getpid())
+        if run:
+            from .runner import run_job as _run_job
+
+            return _run_job(self.path(job_id))
         return self.status(job_id)
 
     def _source_root(self) -> str:
@@ -140,8 +140,14 @@ class JobStore:
 
     def cancel(self, job_id: str) -> dict:
         record = self.read(job_id)
-        pid = int(record.get("pid") or 0)
-        if pid > 0 and _pid_alive(pid):
+        # 执行者现在是插件进程里的队列线程（pid=插件自己），kill 它会带走整个 MCP 服务——
+        # 改为协作取消：写 cancel_requested，runner 在每个阶段边界检查到就停；queued 的
+        # job 队列线程下一轮直接跳过。分离中的 demucs 由 pool 的 stall 看门狗兜底。
+        record["cancel_requested"] = True
+        self.path(job_id).write_text(json.dumps(record, ensure_ascii=False, indent=2))
+        pid = int(record.get("runner_pid") or 0)
+        if pid > 0 and _pid_alive(pid) and record.get("status") == "running":
+            # runner_pid 只在 CLI 直跑（调试路径）时存在——那条路还是进程式的，可以杀。
             try:
                 os.killpg(os.getpgid(pid), signal.SIGTERM)
             except Exception:

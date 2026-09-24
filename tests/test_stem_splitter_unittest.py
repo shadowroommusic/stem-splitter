@@ -131,8 +131,9 @@ class JobTests(unittest.TestCase):
 
     def test_a_job_writes_four_stems_and_reports_every_stage(self):
         store = JobStore(self.root / "jobs")
-        started = store.start(self.source, out_dir=self.root / "out")
-        self.assertEqual(started["status"], "running")
+        started = store.start(self.source, out_dir=self.root / "out", run=True)
+        # run=True 同步执行：start 返回的就是终态（queued 只存在于队列线程路径）
+        self.assertEqual(started["status"], "ok")
         finished = run_job_until_done(store.directory, started["job_id"])
         self.assertEqual(finished["status"], "ok", finished)
         self.assertEqual(sorted(finished["stems"]), sorted(STEMS))
@@ -147,7 +148,7 @@ class JobTests(unittest.TestCase):
     def test_a_backend_that_writes_nothing_fails_with_a_usable_message(self):
         os.environ["STEM_SPLIT_COMMAND"] = f"{sys.executable} -c pass"
         store = JobStore(self.root / "jobs")
-        started = store.start(self.source, out_dir=self.root / "empty")
+        started = store.start(self.source, out_dir=self.root / "empty", run=True)
         finished = run_job_until_done(store.directory, started["job_id"])
         self.assertEqual(finished["status"], "failed")
         self.assertIn("did not write", finished["error"])

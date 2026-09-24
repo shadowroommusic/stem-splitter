@@ -22,6 +22,7 @@ from pathlib import Path
 from .audio import decode_to_wav, duration_ms, read_wav, write_wav
 from .backends import STEMS, find_demucs, plugin_env, resolve
 from .jobs import JobStore, stage
+from .pool import get_pool, stems_cache_dir
 
 __all__ = ["run_job", "main"]
 
@@ -105,7 +106,17 @@ def run_job(job_path: "str | Path") -> dict:
     job_id = Path(job_path).stem
     record = store.read(job_id)
     work = Path(tempfile.mkdtemp(prefix="shadow-separate-"))
+
+    def _cancel_requested() -> bool:
+        try:
+            return bool(store.read(job_id).get("cancel_requested"))
+        except Exception:  # noqa: BLE001 — job 文件读不了就当没取消
+            return False
+
     try:
+        if record.get("cancel_requested"):
+            record.update({"status": "cancelled", "finished_at": time.time()})
+            return _save(store, job_id, record)
         backend = resolve(record.get("backend"))
         record.update({"backend": backend["id"], "stage": "decode"})
         _save(store, job_id, record)
@@ -116,36 +127,48 @@ def run_job(job_path: "str | Path") -> dict:
         record = stage(record, "decode", seconds=round(duration_ms(samples, rate) / 1000, 2), rate=rate)
         _save(store, job_id, record)
 
+        model_name = str(record.get("model") or "htdemucs")
+
+        if _cancel_requested():
+            record.update({"status": "cancelled", "stage": "cancelled", "finished_at": time.time()})
+            return _save(store, job_id, record)
+
         if backend["id"] == "demucs":
-            python, reason = find_demucs()
-            if python is None:
-                raise ValueError(reason)
-            # ADR-025 v2：先整体 ×PRE_GAIN 写临时文件再交给 Demucs——rescale 只在峰值越
-            # ~0.99 时触发，前置衰减让任何 stem 都远低于阈值；ref 归一对所有 source 用同一
-            # 个标量，输出整体 ×k 精确可逆；--float32 保证它不在 16-bit 量化后再缩。
-            quiet = work / "quiet-input.wav"
-            write_wav(quiet, samples * PRE_GAIN, rate)
-            command = _demucs_command(
-                python,
-                str(record.get("model") or "htdemucs"),
-                str(record.get("quality") or "fast"),
-                work,
-                quiet,
-            )
+            record["stage"] = "separate"
+            _save(store, job_id, record)
+            # 任务②：stems 缓存——同歌同模型（sha1(内容+模型)）直接复用，不启动 demucs。
+            cache_dir = stems_cache_dir(source, model_name)
+            if all((cache_dir / f"{stem}.wav").is_file() for stem in STEMS):
+                record["stage"] = "collect"
+                record["cached"] = True
+                _save(store, job_id, record)
+                stems = _collect(cache_dir.parent, Path(record["out_dir"]))
+            else:
+                # ADR-025 v2：先整体 ×PRE_GAIN 写临时文件再交给热 worker——rescale 只在峰值
+                # 越 ~0.99 时触发，前置衰减让任何 stem 都远低于阈值；ref 归一对所有 source 用
+                # 同一个标量，输出整体 ×k 精确可逆。
+                quiet = work / "quiet-input.wav"
+                write_wav(quiet, samples * PRE_GAIN, rate)
+                shifts = 2 if str(record.get("quality") or "fast") == "best" else 0
+                pool = get_pool()
+                pool.separate(quiet, cache_dir, model_name, shifts=shifts)
+                record["stage"] = "collect"
+                _save(store, job_id, record)
+                stems = _collect(cache_dir.parent, Path(record["out_dir"]))
         else:
             remote = work / "remote"
             remote.mkdir(parents=True, exist_ok=True)
-            command = _command_backend(backend["command"], staged, remote, str(record.get("model") or "htdemucs"))
-
-        record["stage"] = "separate"
-        record["command"] = command
-        _save(store, job_id, record)
-        result = subprocess.run(command, capture_output=True, text=True, env=plugin_env())
-        if result.returncode != 0:
-            tail = _tail(result.stderr or result.stdout or "")
-            raise ValueError(f"separator exited {result.returncode}: {tail}")
-
-        stems = _collect(work, Path(record["out_dir"]))
+            command = _command_backend(backend["command"], staged, remote, model_name)
+            record["stage"] = "separate"
+            record["command"] = command
+            _save(store, job_id, record)
+            result = subprocess.run(command, capture_output=True, text=True, env=plugin_env())
+            if result.returncode != 0:
+                tail = _tail(result.stderr or result.stdout or "")
+                raise ValueError(f"separator exited {result.returncode}: {tail}")
+            record["stage"] = "collect"
+            _save(store, job_id, record)
+            stems = _collect(work, Path(record["out_dir"]))
         missing = [stem for stem in STEMS if stem not in stems]
         if missing:
             raise ValueError(f"the separator did not write: {', '.join(missing)}")
@@ -154,9 +177,42 @@ def run_job(job_path: "str | Path") -> dict:
         return _save(store, job_id, record)
     except Exception as error:  # noqa: BLE001 — the message is the product here
         record.update({"status": "failed", "error": str(error), "finished_at": time.time()})
-        return _save(store, job_id, record)
+        _save(store, job_id, record)
+        _quarantine_failed_job(store, job_id, record, error)
+        return record
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _quarantine_failed_job(store: JobStore, job_id: str, record: dict, error: Exception) -> None:
+    """任务③：失败证据进 jobs/failed/<id>/——error.txt（原文 + 各 stage 耗时），照 stemdeckapp。
+
+    半成品的 out_dir 保留在原地（cancel 的清理逻辑管它），这里只搬 job 文件与诊断：
+    出错后 job 文件若留在主目录，status 会继续读到 failed——搬走后 sweep/列表自然不再
+    把它当活跃 job，而证据（何时、哪个阶段、多久）都在。
+    """
+    failed_root = store.directory / "failed" / job_id
+    try:
+        failed_root.mkdir(parents=True, exist_ok=True)
+        stages = record.get("stages") or []
+        timings = "\n".join(
+            f"{entry.get('name', '?')}: {entry.get('ms', '?')}ms" for entry in stages
+        ) or "(no stage completed)"
+        (failed_root / "error.txt").write_text(
+            f"time: {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n"
+            f"job: {job_id}\n"
+            f"source: {record.get('source', '?')}\n"
+            f"backend: {record.get('backend', '?')}\n"
+            f"stage_at_failure: {record.get('stage', '?')}\n"
+            f"stage_timings:\n{timings}\n"
+            f"error: {type(error).__name__}: {error}\n",
+            encoding="utf-8",
+        )
+        job_file = store.path(job_id)
+        if job_file.is_file():
+            shutil.copy2(job_file, failed_root / job_file.name)
+    except Exception:  # noqa: BLE001 — 隔离失败不影响 failed 状态本身
+        pass
 
 
 def _tail(output: str, lines: int = 25) -> str:
@@ -176,10 +232,16 @@ def _tail(output: str, lines: int = 25) -> str:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: python -m shadow_stem_splitter.runner <job.json>", file=sys.stderr)
+        print("usage: python -m shadow_stem_splitter.runner <job.json> [more.json …]", file=sys.stderr)
         return 2
-    record = run_job(sys.argv[1])
-    return 0 if record.get("status") == "ok" else 1
+    # 多个 job 文件 = 一个进程串行跑完——热 worker 的复用就发生在这条路径上（MCP 桥常驻时
+    # 每个 job 各自 main() 的调用方其实是桥本身，等价于同一个常驻进程）。
+    failures = 0
+    for job_path in sys.argv[1:]:
+        record = run_job(job_path)
+        if record.get("status") != "ok":
+            failures += 1
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

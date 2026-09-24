@@ -144,6 +144,15 @@ def handle(message: dict) -> "dict | None":
 
 
 def main() -> None:
+    # 插件进程退出（stdin EOF）时把热 worker 一并带走——不留孤儿 demucs。
+    import atexit
+
+    from .pool import get_pool
+    from .queue_runner import start_queue_thread
+
+    atexit.register(get_pool().shutdown)
+    # 常驻消费线程：queued 的 job 在本进程内串行执行，pool/worker 跨 job 存活。
+    start_queue_thread()
     for line in sys.stdin:
         text = line.strip()
         if text == "":
