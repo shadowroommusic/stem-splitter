@@ -150,3 +150,47 @@ class QuarantineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class SixSourceModelTests(unittest.TestCase):
+    """splitter-6s：模型决定轨数，4 路径不回退。"""
+
+    def test_stems_for_matrix(self):
+        from shadow_stem_splitter.backends import MODELS, STEMS, STEMS_6S, stems_for
+
+        self.assertEqual(stems_for("htdemucs"), STEMS)
+        self.assertEqual(stems_for("htdemucs_ft"), STEMS)
+        self.assertEqual(stems_for("mdx_extra"), STEMS)
+        self.assertEqual(stems_for("htdemucs_6s"), STEMS_6S)
+        self.assertEqual(set(STEMS_6S) - set(STEMS), {"guitar", "piano"})
+        self.assertIn("htdemucs_6s", MODELS, "6s 必须在模型列表里（显式选项）")
+        self.assertNotEqual(MODELS[0], "htdemucs_6s", "默认模型仍是 4 轨 htdemucs")
+
+    def test_unknown_model_is_rejected_readable(self):
+        import tempfile
+
+        from shadow_stem_splitter.jobs import JobStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = write_wav(Path(tmp) / "x.wav")
+            store = JobStore(Path(tmp) / "jobs")
+            with self.assertRaises(ValueError) as caught:
+                store.start(str(wav), model="htdemucs_9s")
+            self.assertIn("pick one of", str(caught.exception))
+            self.assertIn("htdemucs_6s", str(caught.exception))
+
+    def test_collect_finds_six_stems_for_6s_model(self):
+        """_collect 按模型找轨：6s 模型的目录里有 guitar/piano 也要被收进。"""
+        import tempfile
+
+        from shadow_stem_splitter import runner
+        from shadow_stem_splitter.audio import write_wav as w
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "htdemucs_6s" / "song"
+            work.mkdir(parents=True)
+            for stem in ("vocals", "drums", "bass", "other", "guitar", "piano"):
+                w(work / f"{stem}.wav", (0.2 * np.ones(44100)).astype(np.float32), 44100)
+            out = Path(tmp) / "out"
+            stems = runner._collect(Path(tmp), out, model="htdemucs_6s")
+            self.assertEqual(sorted(stems), ["bass", "drums", "guitar", "other", "piano", "vocals"])

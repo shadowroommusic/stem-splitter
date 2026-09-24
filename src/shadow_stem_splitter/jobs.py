@@ -73,6 +73,10 @@ class JobStore:
             raise FileNotFoundError(str(target))
         if target.suffix.lower() not in AUDIO_SUFFIXES:
             raise ValueError(f"not an audio file: {target.name}")
+        from .backends import MODELS
+
+        if model not in MODELS:
+            raise ValueError(f"unknown model {model!r}: pick one of {', '.join(MODELS)}")
         job_id = self.job_id(target.stem)
         destination = Path(out_dir).expanduser() if out_dir else default_out_root() / f"{target.stem}-{job_id.rsplit('-', 1)[-1]}"
         record = {

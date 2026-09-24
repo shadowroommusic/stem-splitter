@@ -19,14 +19,23 @@ import shutil
 import subprocess
 from pathlib import Path
 
-__all__ = ["STEMS", "find_demucs", "command_template", "describe", "resolve"]
+__all__ = ["STEMS", "STEMS_6S", "MODELS", "stems_for", "find_demucs", "command_template", "describe", "resolve"]
 
-#: The four stems Demucs produces, in the order the studio shows them.
+#: The four stems every Demucs model produces, in the order the studio shows them.
 STEPS = ("vocals", "drums", "bass", "other")
 STEMS = STEPS
 
+#: `htdemucs_6s` adds guitar and piano. Official README: "the piano source is not working
+#: great at the moment" — offered as an explicit choice, never the default.
+STEMS_6S = STEPS + ("guitar", "piano")
+
 #: Models worth offering: `htdemucs` is the fast one, `htdemucs_ft` the fine-tuned (4× slower).
-MODELS = ("htdemucs", "htdemucs_ft", "mdx_extra")
+MODELS = ("htdemucs", "htdemucs_ft", "mdx_extra", "htdemucs_6s")
+
+
+def stems_for(model: str) -> "tuple[str, ...]":
+    """Which stems this model writes — the 6-source model adds guitar and piano."""
+    return STEMS_6S if model == "htdemucs_6s" else STEPS
 
 
 def workspace() -> Path:
@@ -92,6 +101,7 @@ def describe() -> dict:
                 "python": python,
                 "models": list(MODELS),
                 "stems": list(STEPS),
+                "stems_by_model": {"htdemucs_6s": list(STEMS_6S), "default": list(STEPS)},
             },
             {
                 "id": "command",

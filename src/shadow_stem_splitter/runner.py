@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from .audio import decode_to_wav, duration_ms, read_wav, write_wav
-from .backends import STEMS, find_demucs, plugin_env, resolve
+from .backends import find_demucs, plugin_env, resolve, stems_for
 from .jobs import JobStore, stage
 from .pool import get_pool, stems_cache_dir
 
@@ -63,7 +63,7 @@ GROUP_PEAK = 0.99
 RESCALE_SIGNATURE = 1.0 / 1.01
 
 
-def _collect(work: Path, out_dir: Path, pre_gain: float = PRE_GAIN) -> dict:
+def _collect(work: Path, out_dir: Path, pre_gain: float = PRE_GAIN, model: str = "htdemucs") -> dict:
     """读回四条 stem，整体还原前置衰减，按**组峰值**缩一次，写 16-bit。
 
     Demucs 用整条混音的 ref 归一（separate.py:171-177，所有 source 乘回同一个
@@ -71,9 +71,10 @@ def _collect(work: Path, out_dir: Path, pre_gain: float = PRE_GAIN) -> dict:
     超 GROUP_PEAK 就整组共用一个增益，四条的相对电平从头到尾只被一个标量动过。
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    stems_expected = stems_for(model)
     found: "dict[str, str]" = {}
     loaded: "dict[str, tuple]" = {}
-    for stem in STEMS:
+    for stem in stems_expected:
         candidates = sorted(
             (path for path in work.rglob("*") if path.is_file() and path.stem.lower() == stem),
             key=lambda path: (path.suffix.lower() not in (".wav", ".flac", ".aiff", ".aif", ".m4a"), len(path.parts)),
@@ -138,11 +139,12 @@ def run_job(job_path: "str | Path") -> dict:
             _save(store, job_id, record)
             # 任务②：stems 缓存——同歌同模型（sha1(内容+模型)）直接复用，不启动 demucs。
             cache_dir = stems_cache_dir(source, model_name)
-            if all((cache_dir / f"{stem}.wav").is_file() for stem in STEMS):
+            stems_expected = stems_for(model_name)
+            if all((cache_dir / f"{stem}.wav").is_file() for stem in stems_expected):
                 record["stage"] = "collect"
                 record["cached"] = True
                 _save(store, job_id, record)
-                stems = _collect(cache_dir.parent, Path(record["out_dir"]))
+                stems = _collect(cache_dir.parent, Path(record["out_dir"]), model=model_name)
             else:
                 # ADR-025 v2：先整体 ×PRE_GAIN 写临时文件再交给热 worker——rescale 只在峰值
                 # 越 ~0.99 时触发，前置衰减让任何 stem 都远低于阈值；ref 归一对所有 source 用
@@ -163,7 +165,7 @@ def run_job(job_path: "str | Path") -> dict:
                     raise
                 record["stage"] = "collect"
                 _save(store, job_id, record)
-                stems = _collect(cache_dir.parent, Path(record["out_dir"]))
+                stems = _collect(cache_dir.parent, Path(record["out_dir"]), model=model_name)
         else:
             remote = work / "remote"
             remote.mkdir(parents=True, exist_ok=True)
@@ -177,8 +179,8 @@ def run_job(job_path: "str | Path") -> dict:
                 raise ValueError(f"separator exited {result.returncode}: {tail}")
             record["stage"] = "collect"
             _save(store, job_id, record)
-            stems = _collect(work, Path(record["out_dir"]))
-        missing = [stem for stem in STEMS if stem not in stems]
+            stems = _collect(work, Path(record["out_dir"]), model=model_name)
+        missing = [stem for stem in stems_for(model_name) if stem not in stems]
         if missing:
             raise ValueError(f"the separator did not write: {', '.join(missing)}")
         record = stage(record, "collect", stems=sorted(stems))
