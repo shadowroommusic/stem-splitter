@@ -140,11 +140,16 @@ class JobStore:
 
     def cancel(self, job_id: str) -> dict:
         record = self.read(job_id)
-        # 执行者现在是插件进程里的队列线程（pid=插件自己），kill 它会带走整个 MCP 服务——
-        # 改为协作取消：写 cancel_requested，runner 在每个阶段边界检查到就停；queued 的
-        # job 队列线程下一轮直接跳过。分离中的 demucs 由 pool 的 stall 看门狗兜底。
+        # cancel 语义（2b068b5 后的形态）：队列线程住在插件进程里（pid=插件自己），杀它
+        # 会带走 MCP 服务。**运行中**的 job → 直接 killpg worker 进程组（分离立刻停止，
+        # 本机重载模型只 1–2 秒）；**排队中**的 → 写 cancel_requested，队列线程下一轮
+        # 跳过（此时没有 worker 可杀）。30 分钟 stall 看门狗保留，作为另一层保险。
         record["cancel_requested"] = True
         self.path(job_id).write_text(json.dumps(record, ensure_ascii=False, indent=2))
+        if record.get("status") == "running":
+            from .pool import get_pool
+
+            get_pool().kill_active()
         pid = int(record.get("runner_pid") or 0)
         if pid > 0 and _pid_alive(pid) and record.get("status") == "running":
             # runner_pid 只在 CLI 直跑（调试路径）时存在——那条路还是进程式的，可以杀。

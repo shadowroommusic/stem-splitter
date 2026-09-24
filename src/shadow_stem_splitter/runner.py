@@ -151,7 +151,16 @@ def run_job(job_path: "str | Path") -> dict:
                 write_wav(quiet, samples * PRE_GAIN, rate)
                 shifts = 2 if str(record.get("quality") or "fast") == "best" else 0
                 pool = get_pool()
-                pool.separate(quiet, cache_dir, model_name, shifts=shifts)
+                try:
+                    pool.separate(quiet, cache_dir, model_name, shifts=shifts)
+                except ValueError as exc:
+                    # cancel 杀 worker 时 separate 会以「worker exited/stalled」抛出——
+                    # 若这个 job 被 cancel 过，落 cancelled 而不是 failed（半成品由
+                    # JobStore.cancel 清理）。
+                    if _cancel_requested():
+                        record.update({"status": "cancelled", "stage": "cancelled", "finished_at": time.time()})
+                        return _save(store, job_id, record)
+                    raise
                 record["stage"] = "collect"
                 _save(store, job_id, record)
                 stems = _collect(cache_dir.parent, Path(record["out_dir"]))

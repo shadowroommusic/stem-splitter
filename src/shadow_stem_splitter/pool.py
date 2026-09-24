@@ -161,6 +161,25 @@ class WorkerPool:
             raise ValueError(str(message))
         raise ValueError(f"unexpected worker marker: {marker[:120]}")
 
+    def kill_active(self) -> None:
+        """立即杀死正在跑的 worker（cancel 用）：killpg 进程组 + 置空。
+
+        代价是下一个 job 重新加载模型（本机实测 1–2 秒）——远好于协作式 cancel 等整个
+        分离跑完（4 分钟的歌就是几分钟）。与 shutdown 的区别：不关 stdin 不等退出，
+        直接 SIGKILL，保证 2 秒内消失。
+        """
+        proc = self._proc
+        self._proc = None
+        if proc is None:
+            return
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
     def shutdown(self) -> None:
         proc = self._proc
         self._proc = None
