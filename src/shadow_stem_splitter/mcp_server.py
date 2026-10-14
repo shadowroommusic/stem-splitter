@@ -20,10 +20,11 @@ SERVER_VERSION = __version__
 PROTOCOL_VERSION = "2024-11-05"
 
 TOOLS = {
-    "separate_stems": "Start separating one audio file into vocals / drums / bass / other. Returns a job id immediately.",
+    "separate_stems": "Start separating one audio file into vocals / drums / bass / other. Returns a job id immediately. On first use this also downloads the local model (about 160 MB, once).",
     "stem_job_status": "Read one separation job (or the recent ones): status, stage, stems, errors.",
     "stem_job_cancel": "Stop a running separation and remove its half-written stems.",
-    "stem_backends": "Which separation backends this machine has (local demucs, or STEM_SPLIT_COMMAND) and how to enable them.",
+    "stem_backends": "Which separation backends this machine has (local demucs, or STEM_SPLIT_COMMAND) and how to enable them; `install` says whether the first-use download is still needed and how big it is.",
+    "stem_install_backend": "Download and install the local separation backend (torch + Demucs + model, about 160 MB, once) so the first real split does not have to wait. Returns a job id; poll it with stem_job_status.",
 }
 
 EMPTY_RESULTS = {
@@ -70,6 +71,8 @@ def _schema(name: str) -> dict:
             "required": ["job_id"],
             "additionalProperties": False,
         }
+    if name == "stem_install_backend":
+        return {"type": "object", "properties": {"job_dir": {"type": "string"}}, "additionalProperties": False}
     return {"type": "object", "properties": {}, "additionalProperties": False}
 
 
@@ -92,6 +95,8 @@ def _run(name: str, arguments: dict) -> dict:
         return store.cancel(str(arguments["job_id"]))
     if name == "stem_backends":
         return describe()
+    if name == "stem_install_backend":
+        return store.start_install()
     raise ValueError(f"unknown tool: {name}")
 
 

@@ -106,6 +106,10 @@ def run_job(job_path: "str | Path") -> dict:
     store = JobStore(Path(job_path).expanduser().parent)
     job_id = Path(job_path).stem
     record = store.read(job_id)
+    if record.get("kind") == "install":
+        from .installer import run_install_job
+
+        return run_install_job(job_path)
     work = Path(tempfile.mkdtemp(prefix="shadow-separate-"))
 
     def _cancel_requested() -> bool:
@@ -118,7 +122,36 @@ def run_job(job_path: "str | Path") -> dict:
         if record.get("cancel_requested"):
             record.update({"status": "cancelled", "finished_at": time.time()})
             return _save(store, job_id, record)
-        backend = resolve(record.get("backend"))
+        try:
+            backend = resolve(record.get("backend"))
+        except ValueError:
+            # 首次分轨：本地 demucs 还没装 → 先自举（下载 torch/Demucs + 模型，
+            # stage 里明示「约 XXX MB，仅一次」），装完重新解析。配了 STEM_SPLIT_COMMAND
+            # 的机器 resolve() 早就成功，不会走到这——远端命令是天然的降级路径；
+            # 用户显式点名 command 而没配时维持原失败语义，不偷换后端。
+            from . import installer
+
+            if record.get("backend") not in (None, "", "auto", "demucs"):
+                raise
+
+            record["stage"] = "install"
+            record["install_step"] = "检查分轨组件"
+            _save(store, job_id, record)
+
+            def _report(text: str) -> None:
+                record["install_step"] = text
+                _save(store, job_id, record)
+
+            try:
+                install_result = installer.install(report=_report, cancel=_cancel_requested)
+            except installer.InstallerError:
+                if _cancel_requested():
+                    record.update({"status": "cancelled", "stage": "cancelled", "finished_at": time.time()})
+                    return _save(store, job_id, record)
+                raise
+            record["install"] = install_result
+            _save(store, job_id, record)
+            backend = resolve(record.get("backend"))
         record.update({"backend": backend["id"], "stage": "decode"})
         _save(store, job_id, record)
 
@@ -135,6 +168,12 @@ def run_job(job_path: "str | Path") -> dict:
             return _save(store, job_id, record)
 
         if backend["id"] == "demucs":
+            # demucs 的 AudioFile shell 出 ffmpeg（torchaudio 2.2.2 在 mac 上没有它读不了
+            # wav）——resolve() 成功不代表 ffmpeg 在（venv 已装而 bin/ffmpeg 缺的重试路径），
+            # 这里幂等补链，便宜（一次 which + glob）。
+            from . import installer
+
+            installer.ensure_ffmpeg()
             record["stage"] = "separate"
             _save(store, job_id, record)
             # 任务②：stems 缓存——同歌同模型（sha1(内容+模型)）直接复用，不启动 demucs。

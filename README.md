@@ -124,10 +124,24 @@ directory that job was given. The source file is only ever read.
 
 | Symptom | Fix |
 | --- | --- |
-| `no separation backend` | Install Demucs into the plugin's venv, or set `STEM_SPLIT_COMMAND` |
+| `no separation backend` | Nothing to fix on a fresh machine — the first `separate_stems` bootstraps itself (see below). To pre-install, call `stem_install_backend`. Or set `STEM_SPLIT_COMMAND` to use a remote separator instead |
 | `FFmpeg is not installed` from Demucs | `pip install soundfile` into the same venv |
 | `numpy` import error | Pin `numpy<2` (torch 2.2.2 was built against numpy 1.x) |
 | A job stays `running` | Its process died: `stem_job_status` reports that as `failed`, and the log tail is in `error` |
+
+## First use downloads the backend (once, ~169 MB)
+
+The heavy dependencies (torch + Demucs ≈ 85 MB of wheels, plus the 84 MB htdemucs weights) do not
+ship with the app. The first `separate_stems` on a machine without them installs them as job stages
+— the job's `install_step` says what is happening, `stem_backends` reports the estimate up front
+(`首次分轨需下载模型（约 169 MB，仅一次）`), and `stem_install_backend` pre-installs without waiting
+for a real song. Pins match the frozen set the production venv uses, including the two that pip
+would otherwise get wrong: `numpy==1.26.4` (torch 2.2.2 is built against numpy 1.x) and
+`soundfile==0.13.1` (torchaudio 2.2.2 has no other wav backend on macOS). The model download
+resumes (`Range`, verified 206), verifies sha256 + size before landing, tries the next URL on a bad
+asset, and every network step has timeouts — a failure leaves a readable Chinese error and a retry
+picks up where it left off. `STEM_SPLIT_COMMAND` machines never download anything: the command
+backend wins resolution, which is the documented fallback path.
 
 ## License
 

@@ -171,7 +171,7 @@ class JobTests(unittest.TestCase):
 
 
 class McpTests(unittest.TestCase):
-    def test_the_server_lists_its_four_tools(self):
+    def test_the_server_lists_its_five_tools(self):
         request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
         completed = subprocess.run(
             [sys.executable, "mcp_server.py"],
@@ -184,7 +184,7 @@ class McpTests(unittest.TestCase):
         reply = json.loads(completed.stdout.strip().splitlines()[0])
         self.assertEqual(
             [tool["name"] for tool in reply["result"]["tools"]],
-            ["separate_stems", "stem_job_status", "stem_job_cancel", "stem_backends"],
+            ["separate_stems", "stem_job_status", "stem_job_cancel", "stem_backends", "stem_install_backend"],
         )
         self.assertEqual(completed.stderr.strip(), "")
 

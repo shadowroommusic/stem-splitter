@@ -23,6 +23,26 @@ Stages: `decode` (any input → a WAV the separator reads), `separate` (demucs o
 writes the four stems somewhere under the work directory), `collect` (find them by name, rewrite each
 as 16-bit PCM WAV into `out_dir`).
 
+## First-use bootstrap (`installer.py`, 2026-10-15)
+
+The desktop package ships neither torch nor the model weights (~169 MB together). The plugin
+bootstraps itself the first time separation is actually requested:
+
+- `runner.run_job` catches the "no backend" resolution failure (only for `auto`/`demucs` requests)
+  and runs `installer.install()` as job stages before re-resolving. A machine with
+  `STEM_SPLIT_COMMAND` resolves to the command backend and never downloads.
+- `stem_install_backend` exposes the same flow as a job, so the plugins page can pre-install and
+  poll `install_step` through `stem_job_status`; cancellation lands on the download loop's chunk
+  boundary and the pip subprocess is bounded by a 30-minute timeout.
+- Pins are the production freeze: `torch==2.2.2 torchaudio==2.2.2 numpy==1.26.4 soundfile==0.13.1
+  demucs==4.0.1`. numpy and soundfile are load-bearing (README troubleshooting has the symptoms);
+  the base interpreter prefers the packaged pbs runtime via `SHADOWROOM_PYTHON_RUNTIME`.
+- The model lands in the torch hub checkpoints dir under the demucs filename convention
+  (`955717e8-8726e21a.th` = sig + sha256 prefix), verified against a pinned sha256 and byte size
+  before it is renamed into place; `.part` files resume via HTTP Range (206 verified).
+- `backends.describe()` carries an `install` block (needed / estimate_bytes / note) so the UI can
+  say 「首次分轨需下载模型（约 XXX MB，仅一次）」 before the user commits.
+
 ## Backends
 
 `find_demucs()` probes, in order: `STEM_SPLIT_PYTHON`, `<ShadowRoom>/_venvs/stem-splitter/bin/python`,

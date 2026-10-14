@@ -92,7 +92,10 @@ def describe() -> dict:
     """What this machine can do right now — the answer to `stem_backends`."""
     python, reason = find_demucs()
     command = command_template()
+    from . import installer  # 延迟导入：mcp_server 顶层只拉 backends，装没装后端都先能列工具
+
     return {
+        "install": installer.status(demucs_available=python is not None),
         "backends": [
             {
                 "id": "demucs",

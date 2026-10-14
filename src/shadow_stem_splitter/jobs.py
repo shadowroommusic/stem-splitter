@@ -109,6 +109,29 @@ class JobStore:
             return _run_job(self.path(job_id))
         return self.status(job_id)
 
+    def start_install(self) -> dict:
+        """首用安装的 job（#94-A.3）：与分离 job 同一套文件/轮询/取消约定，
+        由常驻队列线程串行执行——不会和真正的分离抢着装。"""
+        job_id = f"{time.strftime('%Y%m%d-%H%M%S')}-install"
+        record = {
+            "schema_version": 1,
+            "kind": "install",
+            "job_id": job_id,
+            "status": "running",
+            "stage": "queued",
+            "stages": [],
+            "install_step": None,
+            "install": None,
+            "warnings": [],
+            "started_at": time.time(),
+            "finished_at": None,
+            "pid": 0,
+            "error": None,
+        }
+        self.path(job_id).write_text(json.dumps(record, ensure_ascii=False, indent=2))
+        self.update(job_id, pid=os.getpid())
+        return self.status(job_id)
+
     def _source_root(self) -> str:
         root = str(Path(__file__).resolve().parents[1])
         existing = os.environ.get("PYTHONPATH", "")
